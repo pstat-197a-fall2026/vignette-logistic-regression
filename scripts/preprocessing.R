@@ -11,10 +11,10 @@ str(wine)
 summary(wine)
 
 # change numerical wine quality scores into our three categorical values
-# low quality: score < 5
-# medium quality: 5 <= score < 7
+# low quality: score <= 5
+# medium quality: score = 6
 # high quality: 7 <= score
-wine$quality_group <- ifelse(wine$quality < 5, 0,
+wine$quality_group <- ifelse(wine$quality <= 5, 0,
                        ifelse(wine$quality <= 6, 1, 2))
 wine$quality_group <- factor(wine$quality_group,
                              levels = c(0, 1, 2))
