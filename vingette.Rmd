@@ -12,24 +12,6 @@ output:
     highlight: tango
 ---
 
-```{css, echo = FALSE}
-/* "Action" boxes, styled like the course lab pages */
-.action {
-  border: 1px solid #f1c0c5;
-  border-left: 5px solid #dc3545;
-  border-radius: 4px;
-  margin: 1.5em 0;
-}
-.action::before {
-  content: "\24D8  Action";
-  display: block;
-  background: #fbe3e6;
-  padding: 6px 12px;
-  font-weight: bold;
-}
-.action > * { margin-left: 12px; margin-right: 12px; }
-```
-
 ```{r setup-options, include = FALSE}
 knitr::opts_chunk$set(message = FALSE, warning = FALSE, fig.align = "center")
 ```
