@@ -2,7 +2,7 @@ library(ggplot2)
 library(nnet)
 library(caret)
 
-source("preprocess.R")
+source("scripts/preprocessing.R")
 
 set.seed(123)
 
@@ -99,3 +99,4 @@ confusion_matrix_plot <- ggplot(confusion_matrix, aes(x = Predicted, y = Actual,
 
 confusion_matrix_plot
 
+save(model, file = "../data/multiclass-logistic-model.RData")
