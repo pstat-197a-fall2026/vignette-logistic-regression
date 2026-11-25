@@ -28,7 +28,8 @@ test <- wine[-train_indices, ]
 table(train$quality_group)
 table(test$quality_group)
 
-
+save(train, file = "./data/train_data.RData")
+save(test, file = "./data/test_data.RData")
 
 
 # set medium quality as the reference category
@@ -99,4 +100,4 @@ confusion_matrix_plot <- ggplot(confusion_matrix, aes(x = Predicted, y = Actual,
 
 confusion_matrix_plot
 
-save(model, file = "../data/multiclass-logistic-model.RData")
+save(model, file = "./data/multiclass-logistic-model.RData")

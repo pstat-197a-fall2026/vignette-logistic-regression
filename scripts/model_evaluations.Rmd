@@ -3,3 +3,12 @@ title: "model_evaluations"
 output: html_document
 ---
 
+```{r}
+preprocessed_winequality <- read_csv("../data/preprocessed_winequality.csv")
+multiclass_logistic <- get(load("../data/multiclass-logistic-model.RData"))
+```
+
+```{r}
+
+```
+
