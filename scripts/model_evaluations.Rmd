@@ -10,7 +10,7 @@ library(caret)
 
 
 ```{r}
-preprocessed_winequality <- read.csv("../data/preprocessed_winequality.csv")
+test_data <- get(load("../data/test_data.RData"))
 multiclass_logistic <- get(load("../data/multiclass-logistic-model.RData"))
 colnames(preprocessed_winequality) <- c("fixed acidity", "volatile acidity",
                                         "citric acid", "residual sugar", 
@@ -21,20 +21,30 @@ colnames(preprocessed_winequality) <- c("fixed acidity", "volatile acidity",
 ```
 
 ```{r}
-test_x <- select(preprocessed_winequality, -quality_group)
-test_y <- select(preprocessed_winequality, quality_group)
+test_x <- select(test_data, -quality_group)
+
+test_y <- factor(
+  test_data$quality_group,
+  levels = c("0", "1", "2")
+)
 ```
 
 ```{r}
 multiclass_logistic_predictions <- predict(multiclass_logistic, test_x)
+
+multiclass_logistic_predictions <- factor(
+  multiclass_logistic_predictions,
+  levels = c("0", "1", "2")
+)
+
 multiclass_logistic_probs <- predict(multiclass_logistic, test_x, type = "probs")
-results <- data.frame(actual = test_y[,1], predicted = multiclass_logistic_predictions) %>%
-  mutate(actual = case_when(actual == 0 ~ "poor",
-                            actual == 1 ~ "average",
-                            actual == 2 ~ "good"),
-         predicted = case_when(predicted == 0 ~ "poor",
-                               predicted == 1 ~ "average",
-                               predicted == 2 ~ "good")) %>%
+results <- data.frame(actual = test_y, predicted = multiclass_logistic_predictions) %>%
+  mutate(actual = case_when(actual == "0" ~ "poor",
+                            actual == "1" ~ "average",
+                            actual == "2" ~ "good"),
+         predicted = case_when(predicted == "0" ~ "poor",
+                               predicted == "1" ~ "average",
+                               predicted == "2" ~ "good")) %>%
   mutate(across(c(actual, predicted), as.factor))
 save(results, file = "../data/results.RData")
 ```
@@ -44,9 +54,46 @@ head(results, 25)
 ```
 
 ```{r}
-cm <- confusionMatrix(results$predicted, results$actual, mode = "everything")
+cm <- confusionMatrix(multiclass_logistic_predictions, test_y, mode = "everything")
 cm
 ```
+
+```{r}
+weight0 <- length(test_y[test_y == "0"])/length(test_y)
+weight1 <- length(test_y[test_y == "1"])/length(test_y)
+weight2 <- length(test_y[test_y == "2"])/length(test_y)
+averaging_scores <- data.frame(t(cm$byClass)) %>%
+  setNames(c("Poor", "Average", "Good")) %>%
+  mutate(macro_average = (Poor+Average+Good)/3,
+         weighted_average = weight0*Poor + weight1*Average + weight2*Good)
+
+micro_sensitivity <- (cm$table[1,1]+cm$table[2,2]+cm$table[3,3])/length(test_y)
+micro_specificity <- (sum(cm$table[-1,-1])+sum(cm$table[-2,-2])+sum(cm$table[-3,-3]))/(sum(cm$table[,-1])+sum(cm$table[,-2])+sum(cm$table[,-3]))
+micro_pos_pred <- (cm$table[1,1]+cm$table[2,2]+cm$table[3,3])/ (sum(cm$table[1,])+sum(cm$table[2,])+sum(cm$table[3,]))
+micro_neg_pred <- (sum(cm$table[-1,-1])+sum(cm$table[-2,-2])+sum(cm$table[-3,-3]))/ (sum(cm$table[-1,])+sum(cm$table[-2,])+sum(cm$table[-3,]))
+# mathematically the same as previous metrics
+micro_precision <- micro_pos_pred
+micro_recall <- micro_sensitivity
+micro_f1 <- (2 * micro_precision * micro_recall)/(micro_precision + micro_recall)
+micro_prevalence <- 1/3
+micro_detection_rate <- (cm$table[1,1]+cm$table[2,2]+cm$table[3,3]) / (3 * length(test_y))
+micro_detection_prevalence <- (sum(cm$table[1,])+sum(cm$table[2,])+sum(cm$table[3,])) / (3 * length(test_y))
+micro_balanced_accuracy <- (micro_sensitivity + micro_specificity) / 2
+
+averaging_scores$micro_average <- c(micro_sensitivity,
+                                    micro_specificity,
+                                    micro_pos_pred,
+                                    micro_neg_pred,
+                                    micro_precision,
+                                    micro_recall,
+                                    micro_f1,
+                                    micro_prevalence,
+                                    micro_detection_rate,
+                                    micro_detection_prevalence,
+                                    micro_balanced_accuracy)
+averaging_scores
+```
+
 
 Show predictions and compare to actual vals
 Multi class confusion matrix

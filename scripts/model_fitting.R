@@ -1,6 +1,7 @@
 library(ggplot2)
 library(nnet)
 library(caret)
+library(tidymodels)
 
 source("scripts/preprocessing.R")
 
@@ -28,10 +29,6 @@ test <- wine[-train_indices, ]
 table(train$quality_group)
 table(test$quality_group)
 
-save(train, file = "./data/train_data.RData")
-save(test, file = "./data/test_data.RData")
-
-
 # set medium quality as the reference category
 train$quality_group <- relevel(
   train$quality_group,
@@ -43,6 +40,11 @@ test$quality_group <- factor(
   levels = c("1", "0", "2")
 )
 
+save(train, file = "./data/train_data.RData")
+save(test, file = "./data/test_data.RData")
+
+# Cross fold validation to optimize model
+crossfold_data <- vfold_cv(train, v = 5, strata = quality_group)
 
 # multinomial logistic regression
 model <- multinom(
