@@ -1,5 +1,5 @@
 ---
-title: "model_evaluations"
+title: "Model Evaluations"
 output: html_document
 ---
 # Installing Libraries and Initializing Data 
@@ -12,12 +12,12 @@ library(caret)
 ```{r}
 test_data <- get(load("../data/test_data.RData"))
 multiclass_logistic <- get(load("../data/multiclass-logistic-model.RData"))
-colnames(preprocessed_winequality) <- c("fixed acidity", "volatile acidity",
-                                        "citric acid", "residual sugar", 
-                                        "chlorides", "free sulfur dioxide", 
-                                        "total sulfur dioxide", "density", 
-                                        "pH", "sulphates",
-                                        "alcohol", "quality_group")
+colnames(test_data) <- c("fixed acidity", "volatile acidity",
+                         "citric acid", "residual sugar", 
+                         "chlorides", "free sulfur dioxide", 
+                         "total sulfur dioxide", "density", 
+                         "pH", "sulphates",
+                         "alcohol", "quality_group")
 ```
 
 ```{r}
@@ -28,6 +28,12 @@ test_y <- factor(
   levels = c("0", "1", "2")
 )
 ```
+
+```{r}
+# Shows heavy imbalance with very few good wines
+summary(test_y)
+```
+
 
 # Running Model on Test Data
 ```{r}
@@ -47,7 +53,7 @@ results <- data.frame(actual = test_y, predicted = multiclass_logistic_predictio
                                predicted == "1" ~ "average",
                                predicted == "2" ~ "good")) %>%
   mutate(across(c(actual, predicted), as.factor))
-colnames(results) <- c("actual", "predicted", "predicted_prob_average", "predicted_prob_poor", "predicted_prob_good")
+colnames(results) <- c("actual", "predicted", "pred_prob_avg", "pred_prob_poor", "pred_prob_good")
 save(results, file = "../data/results.RData")
 ```
 
@@ -56,14 +62,61 @@ head(results, 25)
 ```
 
 # Model Evaluations
-### Confusion Matrix
+
+### Probability Metrics
+
+#### Log Loss
+
+#### ROC-AUC
+```{r}
+# Plotting ROC curves, average class having a lower AUC value is to be expected since it is bound between poor and good
+roc_obj_poor <- roc(results$actual == "poor", results$pred_prob_poor)
+plot(roc_obj_poor, 
+   main = paste('ROC Curve for Wine Quality (Poor vs All)'), 
+   xlab = "Specificity",
+   ylab = "Sensitivity",
+   col = '#1c7ed6', 
+   lwd = 3, 
+   print.auc = TRUE,
+   legacy.axes = TRUE,
+   cex.main = 0.75)
+abline(a = 0, b = 1, lty = 2, col = 'darkgray')
+
+roc_obj_avg <- roc(results$actual == "average", results$pred_prob_avg)
+plot(roc_obj_avg, 
+   main = paste('ROC Curve for Wine Quality (Average vs All)'), 
+   xlab = "Specificity",
+   ylab = "Sensitivity",
+   col = '#1c7ed6', 
+   lwd = 3, 
+   print.auc = TRUE,
+   legacy.axes = TRUE,
+   cex.main = 0.75)
+abline(a = 0, b = 1, lty = 2, col = 'darkgray')
+
+roc_obj_good <- roc(results$actual == "good", results$pred_prob_good)
+plot(roc_obj_good, 
+   main = paste('ROC Curve for Wine Quality (Good vs All)'), 
+   xlab = "Specificity",
+   ylab = "Sensitivity",
+   col = '#1c7ed6', 
+   lwd = 3, 
+   print.auc = TRUE,
+   legacy.axes = TRUE,
+   cex.main = 0.75)
+abline(a = 0, b = 1, lty = 2, col = 'darkgray')
+```
+
+### Classification Metrics
+
+#### Confusion Matrix
 ```{r}
 # Confusion matrix for results plus one-to all metrics 
 cm <- confusionMatrix(multiclass_logistic_predictions, test_y, mode = "everything")
 cm
 ```
 
-### Weighted, Macro, and Micro Averaging for Evaluation Metrics
+#### Weighted, Macro, and Micro Averaging for Evaluation Metrics
 ```{r}
 # Calculating macro and weighted average
 # Macro average is just the average of the one to all metrics
@@ -73,8 +126,8 @@ weight1 <- length(test_y[test_y == "1"])/length(test_y)
 weight2 <- length(test_y[test_y == "2"])/length(test_y)
 averaging_scores <- data.frame(t(cm$byClass)) %>%
   setNames(c("Poor", "Average", "Good")) %>%
-  mutate(macro_average = (Poor+Average+Good)/3,
-         weighted_average = weight0*Poor + weight1*Average + weight2*Good)
+  mutate(macro_avg = (Poor+Average+Good)/3,
+         weighted_avg = weight0*Poor + weight1*Average + weight2*Good)
 
 # Calculating micro averages for all metrics, the formula changes based on each metric so have to do it manually
 # To calculate, if the formula for the evaluation metric for class i is a_i/b_i, then the micro average is sum(a_i)/sum(b_i) 
@@ -91,21 +144,18 @@ micro_detection_rate <- (cm$table[1,1]+cm$table[2,2]+cm$table[3,3]) / (3 * lengt
 micro_detection_prevalence <- (sum(cm$table[1,])+sum(cm$table[2,])+sum(cm$table[3,])) / (3 * length(test_y))
 micro_balanced_accuracy <- (micro_sensitivity + micro_specificity) / 2
 
-averaging_scores$micro_average <- c(micro_sensitivity,
-                                    micro_specificity,
-                                    micro_pos_pred,
-                                    micro_neg_pred,
-                                    micro_precision,
-                                    micro_recall,
-                                    micro_f1,
-                                    micro_prevalence,
-                                    micro_detection_rate,
-                                    micro_detection_prevalence,
-                                    micro_balanced_accuracy)
+averaging_scores$micro_avg <- c(micro_sensitivity,
+                                micro_specificity,
+                                micro_pos_pred,
+                                micro_neg_pred,
+                                micro_precision,
+                                micro_recall,
+                                micro_f1,
+                                micro_prevalence,
+                                micro_detection_rate,
+                                micro_detection_prevalence,
+                                micro_balanced_accuracy)
 averaging_scores
 ```
 
-```{r}
-
-```
-
+### Model Validation
