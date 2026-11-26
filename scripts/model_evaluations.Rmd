@@ -2,12 +2,12 @@
 title: "model_evaluations"
 output: html_document
 ---
+# Installing Libraries and Initializing Data 
 ```{r}
 library(dplyr)
 library(nnet)
 library(caret)
 ```
-
 
 ```{r}
 test_data <- get(load("../data/test_data.RData"))
@@ -29,6 +29,7 @@ test_y <- factor(
 )
 ```
 
+# Running Model on Test Data
 ```{r}
 multiclass_logistic_predictions <- predict(multiclass_logistic, test_x)
 
@@ -38,7 +39,7 @@ multiclass_logistic_predictions <- factor(
 )
 
 multiclass_logistic_probs <- predict(multiclass_logistic, test_x, type = "probs")
-results <- data.frame(actual = test_y, predicted = multiclass_logistic_predictions) %>%
+results <- data.frame(actual = test_y, predicted = multiclass_logistic_predictions, multiclass_logistic_probs) %>%
   mutate(actual = case_when(actual == "0" ~ "poor",
                             actual == "1" ~ "average",
                             actual == "2" ~ "good"),
@@ -46,6 +47,7 @@ results <- data.frame(actual = test_y, predicted = multiclass_logistic_predictio
                                predicted == "1" ~ "average",
                                predicted == "2" ~ "good")) %>%
   mutate(across(c(actual, predicted), as.factor))
+colnames(results) <- c("actual", "predicted", "predicted_prob_average", "predicted_prob_poor", "predicted_prob_good")
 save(results, file = "../data/results.RData")
 ```
 
@@ -53,12 +55,19 @@ save(results, file = "../data/results.RData")
 head(results, 25)
 ```
 
+# Model Evaluations
+### Confusion Matrix
 ```{r}
+# Confusion matrix for results plus one-to all metrics 
 cm <- confusionMatrix(multiclass_logistic_predictions, test_y, mode = "everything")
 cm
 ```
 
+### Weighted, Macro, and Micro Averaging for Evaluation Metrics
 ```{r}
+# Calculating macro and weighted average
+# Macro average is just the average of the one to all metrics
+# Weighted average takes adds the one-to-all metrics for each class and weights them by the portion of the data set that fall into that class
 weight0 <- length(test_y[test_y == "0"])/length(test_y)
 weight1 <- length(test_y[test_y == "1"])/length(test_y)
 weight2 <- length(test_y[test_y == "2"])/length(test_y)
@@ -67,11 +76,13 @@ averaging_scores <- data.frame(t(cm$byClass)) %>%
   mutate(macro_average = (Poor+Average+Good)/3,
          weighted_average = weight0*Poor + weight1*Average + weight2*Good)
 
+# Calculating micro averages for all metrics, the formula changes based on each metric so have to do it manually
+# To calculate, if the formula for the evaluation metric for class i is a_i/b_i, then the micro average is sum(a_i)/sum(b_i) 
 micro_sensitivity <- (cm$table[1,1]+cm$table[2,2]+cm$table[3,3])/length(test_y)
 micro_specificity <- (sum(cm$table[-1,-1])+sum(cm$table[-2,-2])+sum(cm$table[-3,-3]))/(sum(cm$table[,-1])+sum(cm$table[,-2])+sum(cm$table[,-3]))
 micro_pos_pred <- (cm$table[1,1]+cm$table[2,2]+cm$table[3,3])/ (sum(cm$table[1,])+sum(cm$table[2,])+sum(cm$table[3,]))
 micro_neg_pred <- (sum(cm$table[-1,-1])+sum(cm$table[-2,-2])+sum(cm$table[-3,-3]))/ (sum(cm$table[-1,])+sum(cm$table[-2,])+sum(cm$table[-3,]))
-# mathematically the same as previous metrics
+# micro_precision and micro_recall are mathematically the same as previous metrics
 micro_precision <- micro_pos_pred
 micro_recall <- micro_sensitivity
 micro_f1 <- (2 * micro_precision * micro_recall)/(micro_precision + micro_recall)
@@ -94,15 +105,7 @@ averaging_scores$micro_average <- c(micro_sensitivity,
 averaging_scores
 ```
 
+```{r}
 
-Show predictions and compare to actual vals
-Multi class confusion matrix
+```
 
-Per class metrics of one vs rest
-  for precision recall and f1
-  Why f1 over roc auc
-  
-Average metrics
-  unweighted macro average
-  weighted average
-  micro average
