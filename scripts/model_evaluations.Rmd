@@ -7,6 +7,7 @@ output: html_document
 library(dplyr)
 library(nnet)
 library(caret)
+library(yardstick)
 ```
 
 ```{r}
@@ -66,6 +67,12 @@ head(results, 25)
 ### Probability Metrics
 
 #### Log Loss
+```{r}
+results <- results %>%
+  mutate(actual = factor(actual, levels = c("average", "poor", "good")))
+
+mn_log_loss(results, truth = actual, pred_prob_avg:pred_prob_good)
+```
 
 #### ROC-AUC
 ```{r}
