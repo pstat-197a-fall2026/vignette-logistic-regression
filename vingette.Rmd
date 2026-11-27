@@ -1,6 +1,6 @@
 ---
 title: "Multinomial logistic regression"
-author: "TODO: Name 1, Name 2, Name 3, Name 4"
+author: "TODO: Kyle Costabile, Shiv Dutta, Alison Gu, Caroline Liu, Chris Zaragoza"
 date: "PSTAT 197A, Fall 2026"
 output:
   html_document:
