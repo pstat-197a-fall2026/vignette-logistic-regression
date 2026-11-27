@@ -55,6 +55,7 @@ summary(test_y)
 
 ### Fitted vs Residuals
 ```{r}
+# Done to like make sure the model is actually valid the plots look good overall
 binnedplot(fitted(multiclass_logistic)[,2], residuals(multiclass_logistic, type = "response")[,2], main = "Binned Residual Plot for Poor")
 binnedplot(fitted(multiclass_logistic)[,1], residuals(multiclass_logistic, type = "response")[,1], main = "Binned Residual Plot for Average")
 binnedplot(fitted(multiclass_logistic)[,3], residuals(multiclass_logistic, type = "response")[,3], main = "Binned Residual Plot for Good")
