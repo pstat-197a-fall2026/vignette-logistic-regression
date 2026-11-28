@@ -1,6 +1,7 @@
 ---
 title: "Multinomial logistic regression"
-author: "TODO: Kyle Costabile, Shiv Dutta, Alison Gu, Caroline Liu, Chris Zaragoza"
+subtitle: "Predicting red wine quality from chemical measurements"
+author: "Kyle Costabile, Shiv Dutta, Alison Gu, Caroline Liu, Chris Zaragoza"
 date: "PSTAT 197A, Fall 2026"
 output:
   html_document:
@@ -18,21 +19,29 @@ knitr::opts_chunk$set(message = FALSE, warning = FALSE, fig.align = "center")
 
 # Abstract
 
-*TODO: In one paragraph, say what multinomial logistic regression is, which dataset we use, and who this vignette is for, then end with a short "We will:" bullet list of the main steps.*
+Multinomial logistic regression extends binary logistic regression to outcomes with more than two classes. We use it to predict whether a red wine is **poor**, **average**, or **good** from 11 chemical measurements. This vignette is for students who know binary logistic regression.
+
+We will:
+
+- explore the data and its class imbalance
+- split and standardize the data
+- fit the model with `nnet::multinom()` and interpret it
+- evaluate predictions on a test set
+- handle class imbalance and correlated predictors
 
 # Dataset
 
-*TODO: Describe where the data come from (with a link to the UCI/Kaggle page) and how many wines and variables there are, then check the table below.*
+The data come from the [UCI Machine Learning Repository](https://archive.ics.uci.edu/dataset/186/wine+quality) (Cortez et al., 2009). Each row is a Portuguese red wine with 11 measurements and a quality score (0–10) from expert tasters.
 
 | Variable               | Description                                    |
 |------------------------|------------------------------------------------|
-| `fixed_acidity`        | Tartaric acid (g/L)                            |
-| `volatile_acidity`     | Acetic acid (g/L)                              |
-| `citric_acid`          | Citric acid (g/L)                              |
-| `residual_sugar`       | Sugar left after fermentation (g/L)            |
+| `fixed acidity`        | Tartaric acid (g/L)                            |
+| `volatile acidity`     | Acetic acid (g/L)                              |
+| `citric acid`          | Citric acid (g/L)                              |
+| `residual sugar`       | Sugar left after fermentation (g/L)            |
 | `chlorides`            | Sodium chloride (g/L)                          |
-| `free_sulfur_dioxide`  | Free SO₂ (mg/L)                                |
-| `total_sulfur_dioxide` | Free + bound SO₂ (mg/L)                        |
+| `free sulfur dioxide`  | Free SO₂ (mg/L)                                |
+| `total sulfur dioxide` | Free + bound SO₂ (mg/L)                        |
 | `density`              | Density (g/cm³)                                |
 | `pH`                   | Acidity on the pH scale                        |
 | `sulphates`            | Potassium sulphate (g/L)                       |
@@ -41,158 +50,274 @@ knitr::opts_chunk$set(message = FALSE, warning = FALSE, fig.align = "center")
 
 # Setup
 
-```{r setup}
-# packages
-library(tidyverse)
-library(tidymodels)
-library(nnet)
-
-# read in data
-wine <- read_csv('data/winequality-red.csv')
+```{r packages}
+library(ggplot2)     # plotting
+library(nnet)        # multinom(): multinomial logistic regression
+library(caret)       # confusionMatrix(), train()
+library(tidymodels)  # loads dplyr, tidyr and yardstick
+library(readr)       # read_csv()
+library(pROC)        # roc(): ROC curves and AUC
 ```
 
-The data contain 11 chemical measurements for each of `r nrow(wine)` red wines, along with a quality score assigned by expert tasters. Very few wines get extreme scores:
-
-```{r}
-wine %>% count(quality)
+```{r load-data}
+wine <- read_csv("data/winequality-red.csv", show_col_types = FALSE)
+dim(wine)
+summary(wine)
 ```
 
-So we'll group the scores into three classes: **low** (5 or below), **medium** (6), and **high** (7 or above). The column names also contain spaces, which are awkward in model formulas, so we'll replace them with underscores.
+There are `r nrow(wine)` wines. The predictors are on very different scales (density stays near 1, total sulfur dioxide reaches the hundreds), which we fix later.
 
-```{r}
-# clean column names and define quality classes
-wine <- wine %>%
-  rename_with(~ str_replace_all(.x, ' ', '_')) %>%
-  mutate(quality_group = cut(quality,
-                             breaks = c(-Inf, 5, 6, Inf),
-                             labels = c('low', 'medium', 'high'))) %>%
-  select(-quality)
+## Defining the outcome
 
-wine %>% count(quality_group)
+Few wines get extreme scores, so we group them into three classes:
+
+- **0 = poor**: score ≤ 5
+- **1 = average**: score = 6
+- **2 = good**: score ≥ 7
+
+```{r define-classes}
+wine$quality_group <- ifelse(wine$quality <= 5, 0,
+                             ifelse(wine$quality <= 6, 1, 2))
+wine$quality_group <- factor(wine$quality_group, levels = c(0, 1, 2))
+
+# remove the raw score so it can't be used as a predictor
+wine$quality <- NULL
+
+table(wine$quality_group)
+prop.table(table(wine$quality_group))
 ```
-
-Notice that the high class is much smaller than the other two. We'll come back to this later.
 
 # Exploratory analysis
 
-## Missing data
+## Missing data and duplicates
 
-*TODO: Check for missing values and duplicate rows, and say in a sentence what you found.*
-
-```{r}
-# TODO: code
+```{r missing}
+colSums(is.na(wine))   # missing values per column
+sum(duplicated(wine))  # rows that repeat an earlier row
 ```
+
+There are no missing values. There are `r sum(duplicated(wine))` duplicate rows, which we keep. Some may end up in both the training and test sets, which can make test results look slightly better.
 
 ## Class balance
 
-*TODO: Plot the number of wines in each quality class and explain why the imbalance matters for the model.*
-
-```{r}
-# TODO: code
+```{r class-balance, fig.height = 3.5}
+ggplot(wine, aes(x = quality_group)) +
+  geom_bar(fill = "steelblue") +
+  scale_x_discrete(labels = c("0" = "poor (0)", "1" = "average (1)", "2" = "good (2)")) +
+  labs(title = "Number of wines in each quality group",
+       x = "Quality group", y = "Count")
 ```
+
+Only `r round(100 * mean(wine$quality_group == "2"), 1)`% of wines are good. The model will likely struggle most with this class (Section 9), and we try a fix in Section 10.
 
 ## Predictors by class
 
-*TODO: Make boxplots of a few predictors (e.g. alcohol, volatile acidity, sulphates) by quality class and describe which ones seem to separate the classes.*
-
-```{r}
-# TODO: code
+```{r predictors-by-class, fig.height = 4}
+wine %>%
+  select(quality_group, alcohol, `volatile acidity`, sulphates) %>%
+  pivot_longer(-quality_group, names_to = "predictor", values_to = "value") %>%
+  ggplot(aes(x = quality_group, y = value, fill = quality_group)) +
+  geom_boxplot(show.legend = FALSE) +
+  facet_wrap(~ predictor, scales = "free_y") +
+  labs(title = "Selected predictors by quality group",
+       x = "Quality group (0 = poor, 1 = average, 2 = good)", y = NULL)
 ```
+
+Better wines tend to have more alcohol and sulphates and less volatile acidity. The boxes overlap a lot, so no single predictor is enough. We use all 11.
 
 # Data partitioning
 
-::: action
-**Data partitioning**
+## Stratified train/test split
 
-1.  Copy the code chunk below into your script but do not run the resulting lines.
-2.  Coordinate with your neighbor: choose a new RNG seed and input the same value in each of your scripts.
-3.  Execute lines to partition the data.
-:::
+We hold out 20% of wines for testing. We sample **within each class** so both sets keep the same class proportions.
 
-```{r}
-# partition
-set.seed(112425)
-partitions <- wine %>%
-  initial_split(prop = 0.8, strata = quality_group)
+```{r split}
+set.seed(123)   # makes the split reproducible
 
-train <- training(partitions)
-test <- testing(partitions)
+train_indices <- unlist(
+  lapply(levels(wine$quality_group), function(group) {
+    group_indices <- which(wine$quality_group == group)   # rows in this class
+    sample(group_indices,
+           size = length(group_indices) -
+             max(1, floor(0.2 * length(group_indices))))  # keep 80% for training
+  })
+)
+
+train <- wine[train_indices, ]
+test  <- wine[-train_indices, ]
+
+table(train$quality_group)
+table(test$quality_group)
 ```
 
-The `strata` argument makes the split *stratified*: rows are sampled separately within each class, so the training and test sets keep the same class proportions. Without it, a random split could leave the test set with very few high-quality wines.
+## Choosing the reference class
 
-The predictors are measured on very different scales (density is always close to 1, while total sulfur dioxide ranges into the hundreds). We'll standardize them so that the coefficients are comparable. The means and standard deviations are computed from the training set **only** and then applied to both partitions.
+`multinom()` compares each class to a **reference class** (the first factor level). We use average, so the model compares poor vs. average and good vs. average.
 
-```{r}
-# standardize predictors using training-set means and SDs
-rec <- recipe(quality_group ~ ., data = train) %>%
-  step_normalize(all_predictors()) %>%
-  prep()
+```{r relevel}
+train$quality_group <- relevel(train$quality_group, ref = "1")
+test$quality_group  <- factor(test$quality_group, levels = c("1", "0", "2"))
 
-train_std <- bake(rec, new_data = train)
-test_std <- bake(rec, new_data = test)
+levels(train$quality_group)
+```
+
+## Standardizing the predictors
+
+We rescale each predictor to mean 0 and SD 1. Predictions stay the same, but coefficients become comparable and the model fits more reliably. The means and SDs come from the **training set only**, so no test information leaks in.
+
+```{r standardize}
+predictors  <- setdiff(names(train), "quality_group")
+train_means <- sapply(train[predictors], mean)
+train_sds   <- sapply(train[predictors], sd)
+
+train[predictors] <- as.data.frame(scale(train[predictors], center = train_means, scale = train_sds))
+test[predictors]  <- as.data.frame(scale(test[predictors],  center = train_means, scale = train_sds))
+
+round(sapply(train[predictors], mean), 3)   # all approximately 0
 ```
 
 # From binary to multinomial
 
-*TODO: Explain in a few sentences how multinomial logistic regression extends binary logistic regression, including the reference class and the log-odds equations.*
+Binary logistic regression models the log-odds of one class vs. the other:
+
+$$
+\log\frac{P(Y = 1 \mid x)}{P(Y = 0 \mid x)} = \beta_0 + x^\top\beta .
+$$
+
+With $K$ classes, we fit one such equation for each class except the reference. With average as the reference:
+
+$$
+\log\frac{P(\text{poor} \mid x)}{P(\text{average} \mid x)} = \beta_{0,\text{poor}} + x^\top\beta_{\text{poor}},
+\qquad
+\log\frac{P(\text{good} \mid x)}{P(\text{average} \mid x)} = \beta_{0,\text{good}} + x^\top\beta_{\text{good}} .
+$$
+
+With $\eta_k = \beta_{0,k} + x^\top\beta_k$ and $\eta_{\text{average}} = 0$, the class probabilities are
+
+$$
+P(Y = k \mid x) = \frac{e^{\eta_k}}{1 + e^{\eta_{\text{poor}}} + e^{\eta_{\text{good}}}} .
+$$
+
+They sum to 1, and the predicted class is the most likely one.
+
+**Interpretation.** $e^{\beta_{kj}}$ is a **relative risk ratio (RRR)**: a one-SD increase in $x_j$ multiplies $P(k)/P(\text{average})$ by $e^{\beta_{kj}}$, holding other predictors fixed. RRR \> 1 favors class $k$; RRR \< 1 favors average.
 
 # Fitting the model
 
-*TODO: Set medium as the reference class and fit the model with `nnet::multinom()`, explaining each step.*
+`multinom()` fits the model iteratively. Its default of 100 iterations can stop too early, so we set `maxit = 1000` and check that it **converged**.
 
-```{r}
-# TODO: code
+```{r fit}
+model <- multinom(quality_group ~ ., data = train, maxit = 1000)
+model$convergence   # 0 = converged; 1 = stopped early
 ```
+
+It converged (`model$convergence` = `r model$convergence`). The "24 variable" in the log is the number of parameters: 12 (intercept + 11 predictors) for each of the two equations.
+
+```{r summary}
+summary(model)
+```
+
+Row `0` is poor vs. average and row `2` is good vs. average. Average has no row because it's the reference.
 
 ## Interpreting coefficients
 
-*TODO: Show the exponentiated coefficients (relative risk ratios) and walk through how to interpret one of them.*
+We exponentiate the coefficients to get RRRs, and compute p-values from $z = \hat\beta / \widehat{\text{SE}}$:
 
-```{r}
-# TODO: code
+```{r rrr}
+round(exp(coef(model)), 2)
 ```
 
-::: action
-**Check your understanding**
+```{r p-values}
+z <- summary(model)$coefficients / summary(model)$standard.errors
+p <- 2 * pnorm(-abs(z))
+round(p, 3)
+```
 
-*TODO: Write 2–4 discussion questions about the fitted model.*
-:::
+**Alcohol:** a one-SD increase (about `r round(train_sds["alcohol"], 2)`% vol) multiplies the odds of poor vs. average by `r round(exp(coef(model))["0", "alcohol"], 2)` and the odds of good vs. average by `r round(exp(coef(model))["2", "alcohol"], 2)`. More alcohol pushes wines away from poor and toward good.
+
+**Sulphates** follow the same pattern (RRR `r round(exp(coef(model))["0", "sulphates"], 2)` for poor, `r round(exp(coef(model))["2", "sulphates"], 2)` for good). **Volatile acidity** works the other way: it raises the odds of poor and lowers the odds of good.
+
+**Density** matters for good vs. average but not poor vs. average. It's strongly correlated with alcohol and fixed acidity, so its own effect is hard to pin down (Section 11).
 
 # Predictions
 
-*TODO: Predict classes and probabilities on the test set, then show the confusion matrix, accuracy, and multiclass AUC (e.g. `yardstick::roc_auc()`).*
+*TODO: Predict classes and probabilities for the test set; show a few rows. Note that each row of probabilities sums to 1.*
 
-```{r}
-# TODO: code
+```{r predict}
+# TODO: copy section 4 of vignette-script.R
+```
+
+# Evaluating the model
+
+## Confusion matrix
+
+*TODO: Show the heatmap. Note that good wines are mostly mistaken for average, almost never for poor (the classes are ordered).*
+
+```{r confusion-matrix}
+# TODO: copy section 5 (leave out ggsave())
+```
+
+## Accuracy and per-class metrics
+
+*TODO: Compare accuracy with the no-information rate. Show recall and F1 per class; explain why good is lowest.*
+
+```{r metrics}
+# TODO: copy sections 6 and 8
+```
+
+## Macro and weighted averages
+
+*TODO: Define macro and weighted averages in one sentence each. Say why macro F1 suits imbalanced data. Mention that micro average equals accuracy here.*
+
+```{r averages}
+# TODO: copy section 9 (consider showing only Precision, Recall, F1)
+```
+
+## ROC curves and log loss
+
+*TODO: Show the three ROC curves and AUCs. Explain why average has the lowest AUC. One sentence on log loss.*
+
+```{r roc}
+# TODO: copy section 7; remove png() and dev.off() so plots show inline
+```
+
+## Baseline and cross-validation
+
+*TODO: Report the baseline comparison. One sentence: tuning decay didn't change CV accuracy, so we keep the unpenalized model.*
+
+```{r validation}
+# TODO: copy section 10
 ```
 
 # Class imbalance
 
-*TODO: Show how the small high-quality class affects the model, and try a fix such as class weights.*
+*TODO: Explain class weights, w = n / (3 n_class). Compare the weighted and unweighted models: good-wine recall more than doubles, accuracy is unchanged, average-wine recall drops.*
 
-```{r}
-# TODO: code
+```{r class-weights}
+# TODO: copy section 8b
 ```
 
 # Multicollinearity
 
-*TODO: Look at correlations between predictors and explain how strongly correlated predictors affect the coefficients.*
+*TODO: Show predictor correlations and name the strongest pairs. Explain that correlated predictors make coefficients unstable, using density as the example. Add this code to the script too.*
 
-```{r}
-# TODO: code
+```{r multicollinearity}
+# TODO: e.g. round(cor(train[predictors]), 2)
 ```
 
 # Extension
 
 ::: action
-*TODO: Write one open-ended exercise for the reader to try on their own.*
+*TODO: One exercise for the reader, e.g. use poor as the reference class, or try MASS::polr().*
 :::
 
 # Conclusion
 
-*TODO: Summarize how well the model did, what the coefficients told us about wine quality, the main limitations (imbalance, correlated predictors, ignoring the ordering of classes), and what a reader could try next.*
+*TODO: Summarize key results with inline R (accuracy vs. baseline, macro F1, top predictors, effect of weights). List limitations (imbalance, linear model, ordered classes treated as unordered, duplicates) and next steps.*
 
 # References
 
-*TODO: List at least two references for learning more about multinomial logistic regression.*
+*TODO: Add at least one more reference.*
+
+1.  Cortez, P., Cerdeira, A., Almeida, F., Matos, T., & Reis, J. (2009). Modeling wine preferences by data mining from physicochemical properties. *Decision Support Systems*, 47(4), 547–553.
+2.  James, G., Witten, D., Hastie, T., & Tibshirani, R. (2021). *An Introduction to Statistical Learning* (2nd ed.), Section 4.3.5. Springer.

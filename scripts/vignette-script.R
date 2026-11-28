@@ -57,6 +57,31 @@ prop.table(table(wine$quality_group))
 write.csv(wine, file = "data/preprocessed_winequality.csv", row.names = FALSE)
 
 
+#1b. EXPLORATORY ANALYSIS
+
+# duplicate rows: identical measurements that appear more than once
+sum(duplicated(wine))
+
+# class balance: number of wines in each quality group
+class_balance_plot <- ggplot(wine, aes(x = quality_group)) +
+  geom_bar(fill = "steelblue") +
+  scale_x_discrete(labels = c("0" = "poor (0)", "1" = "average (1)", "2" = "good (2)")) +
+  labs(title = "Number of wines in each quality group",
+       x = "Quality group", y = "Count")
+class_balance_plot
+
+# distributions of three predictors by quality group
+predictor_boxplots <- wine %>%
+  select(quality_group, alcohol, `volatile acidity`, sulphates) %>%
+  pivot_longer(-quality_group, names_to = "predictor", values_to = "value") %>%
+  ggplot(aes(x = quality_group, y = value, fill = quality_group)) +
+  geom_boxplot(show.legend = FALSE) +
+  facet_wrap(~ predictor, scales = "free_y") +   # each predictor gets its own y-axis
+  labs(title = "Selected predictors by quality group",
+       x = "Quality group (0 = poor, 1 = average, 2 = good)", y = NULL)
+predictor_boxplots
+
+
 #2. STRATIFIED TRAIN / TEST SPLIT
 
 # sample WITHIN each quality class so that train and test keep the same class
@@ -119,6 +144,12 @@ summary(model)                    # coefficients and standard errors, one row pe
 
 exp(coef(model))                  # relative risk ratios: multiplicative change in the odds of
 # (poor or good) vs average for a 1-SD increase in the predictor
+
+# Wald tests: z = coefficient / standard error, two-sided p-value from N(0, 1)
+z <- summary(model)$coefficients / summary(model)$standard.errors
+p <- 2 * pnorm(-abs(z))
+round(p, 3)
+
 head(round(fitted(model), 2))     # fitted class probabilities for the first training wines
 
 save(model, file = "./data/multiclass-logistic-model.RData")
