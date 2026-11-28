@@ -404,7 +404,7 @@ The p-value is tiny, so the model clearly beats the baseline.
 One test set gives one estimate. **10-fold cross-validation** on the training data gives a more stable one. We also tune `decay`, the L2 (ridge) penalty in `multinom()`. `decay = 0` is the unpenalized model we fit above.
 
 ```{r validation, fig.height = 3.5}
-train_x <- dplyr::select(train, -quality_group)
+train_x <- as.data.frame(dplyr::select(train, -quality_group))
 train_y <- factor(train$quality_group, levels = c("0", "1", "2"))
 
 set.seed(123)   # reproducible fold assignment
@@ -420,7 +420,7 @@ round(cv_fit$results[, c("decay", "Accuracy", "Kappa")], 4)
 plot(cv_fit)
 ```
 
-Cross-validated accuracy is between `r round(min(cv_fit$results$Accuracy), 3)` and `r round(max(cv_fit$results$Accuracy), 3)` for every decay value. The plot looks dramatic only because its y-axis spans less than 0.001. Penalizing doesn't help, so **we keep the unpenalized model**. CV accuracy is also close to our test accuracy, so the test result isn't a lucky split.
+Cross-validated accuracy is between `r round(min(cv_fit$results$Accuracy), 3)` and `r round(max(cv_fit$results$Accuracy), 3)` for every decay value. The plot looks dramatic only because its y-axis spans less than 0.001. The penalty makes no meaningful difference, **so we keep the unpenalized model**. CV accuracy is also close to our test accuracy, so the test result isn't a lucky split.
 
 # Class imbalance
 
@@ -447,6 +447,7 @@ model_w$convergence   # 0 = converged
 pred_w <- factor(predict(model_w, newdata = test, type = "class"),
                  levels = c("0", "1", "2"))
 cm_w <- confusionMatrix(pred_w, test_y, mode = "everything")
+cm_w_counts <- table(Predicted = pred_w, Actual = test_y)
 
 # recall by class
 data.frame(class             = c("poor", "average", "good"),
@@ -460,7 +461,7 @@ data.frame(model    = c("unweighted", "weighted"),
            macro_f1 = round(c(mean(cm$byClass[, "F1"]), mean(cm_w$byClass[, "F1"])), 3))
 ```
 
-Weighting more than doubles recall for good wines, from `r round(cm$byClass["Class: 2", "Recall"], 2)` to `r round(cm_w$byClass["Class: 2", "Recall"], 2)`. Accuracy is the same (`r round(cm_w$overall["Accuracy"], 3)`) and macro F1 rises to `r round(mean(cm_w$byClass[, "F1"]), 3)`. The cost is lower recall for average wines (`r round(cm_w$byClass["Class: 1", "Recall"], 2)` vs. `r round(cm$byClass["Class: 1", "Recall"], 2)`): many of them are now called good.
+Weighting more than doubles recall for good wines, from `r round(cm$byClass["Class: 2", "Recall"], 2)` to `r round(cm_w$byClass["Class: 2", "Recall"], 2)`. Accuracy is the same (`r round(cm_w$overall["Accuracy"], 3)`) and macro F1 rises to `r round(mean(cm_w$byClass[, "F1"]), 3)`. The cost is lower recall for average wines (`r round(cm_w$byClass["Class: 1", "Recall"], 2)` vs. `r round(cm$byClass["Class: 1", "Recall"], 2)`): the number of average wines called good rises from `r cm_counts["2", "1"]` to `r cm_w_counts["2", "1"]`, and precision for good falls from `r round(cm$byClass["Class: 2", "Precision"], 2)` to `r round(cm_w$byClass["Class: 2", "Precision"], 2)` because the model now labels `r sum(cm_w_counts["2", ])` wines good.
 
 Which model is better depends on the goal. If finding good wines matters, for example for a buyer, the weighted model is the better choice. Weights change only how training wines count. The test set is never reweighted.
 
@@ -516,7 +517,7 @@ c(with_density    = mean(test_y_pred == test_y),
   without_density = mean(pred_nd == test_y))
 ```
 
-Without density, the fixed acidity coefficient for good vs. average drops from `r round(coef(model)["2", terms[2]], 2)` to `r round(coef(model_no_density)["2", terms[2]], 2)`, almost nothing. The alcohol coefficient for good grows from `r round(coef(model)["2", "alcohol"], 2)` to `r round(coef(model_no_density)["2", "alcohol"], 2)`. Every standard error shrinks. Test accuracy barely moves (`r round(mean(pred_nd == test_y), 3)` vs. `r round(mean(test_y_pred == test_y), 3)`).
+Without density, the fixed acidity coefficient for good vs. average drops from `r round(coef(model)["2", terms[2]], 2)` to `r round(coef(model_no_density)["2", terms[2]], 2)`, nearly zero. The alcohol coefficient for good grows from `r round(coef(model)["2", "alcohol"], 2)` to `r round(coef(model_no_density)["2", "alcohol"], 2)`. Every standard error shrinks. Test accuracy barely moves (`r round(mean(pred_nd == test_y), 3)` vs. `r round(mean(test_y_pred == test_y), 3)`).
 
 The lesson: with collinear predictors, **don't read too much into any single coefficient**. If interpretation matters, drop or combine redundant predictors, or use a penalty. If you only need predictions, collinearity is a much smaller concern.
 
@@ -538,7 +539,7 @@ Multinomial logistic regression extends binary logistic regression to three or m
 
 - The model reaches `r round(100 * cm$overall["Accuracy"], 1)`% test accuracy, well above the `r round(100 * cm$overall["AccuracyNull"], 1)`% from always guessing poor, with macro F1 `r round(mean(cm$byClass[, "F1"]), 3)`.
 - **Alcohol** and **sulphates** push wines away from poor and toward good. **Volatile acidity** pushes them toward poor.
-- The rare good class is the hardest to predict. Class weights raise its recall from `r round(cm$byClass["Class: 2", "Recall"], 2)` to `r round(cm_w$byClass["Class: 2", "Recall"], 2)` at no cost in accuracy.
+- The rare good class is the hardest to predict. Class weights raise its recall from `r round(cm$byClass["Class: 2", "Recall"], 2)` to `r round(cm_w$byClass["Class: 2", "Recall"], 2)` with no change in accuracy, at the cost of lower recall for average wines. 
 - Correlated predictors such as density make individual coefficients unstable but barely affect predictions.
 
 **Limitations.**
