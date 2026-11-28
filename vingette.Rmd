@@ -241,83 +241,321 @@ round(p, 3)
 
 # Predictions
 
-*TODO: Predict classes and probabilities for the test set; show a few rows. Note that each row of probabilities sums to 1.*
+We can ask the model for two things on each test wine: the single most likely class, or the probability of every class.
 
 ```{r predict}
-# TODO: copy section 4 of vignette-script.R
+# most likely class for each test wine
+predicted_classes <- predict(model, newdata = test, type = "class")
+
+# probability of each class for each test wine
+predicted_probabilities <- predict(model, newdata = test, type = "probs")
+
+round(head(predicted_probabilities), 3)
+head(data.frame(Actual = test$quality_group, Predicted = predicted_classes))
+```
+
+The probability columns follow the factor levels of the training outcome, so they appear in the order average (`1`), poor (`0`), good (`2`). The predicted class is the column with the largest probability. Each row sums to 1:
+
+```{r probs-sum}
+summary(rowSums(predicted_probabilities))
 ```
 
 # Evaluating the model
 
 ## Confusion matrix
 
-*TODO: Show the heatmap. Note that good wines are mostly mistaken for average, almost never for poor (the classes are ordered).*
+A confusion matrix counts every combination of actual and predicted class. Correct predictions lie on the diagonal.
 
-```{r confusion-matrix}
-# TODO: copy section 5 (leave out ggsave())
+```{r confusion-matrix, fig.width = 6, fig.height = 4.5}
+# count every (predicted, actual) pair, with levels in the order 0, 1, 2
+cm_counts <- table(
+  Predicted = factor(predicted_classes,  levels = c("0", "1", "2")),
+  Actual    = factor(test$quality_group, levels = c("0", "1", "2"))
+)
+confusion_matrix <- as.data.frame(cm_counts)
+
+ggplot(confusion_matrix, aes(x = Predicted, y = Actual, fill = Freq)) +
+  geom_tile(color = "white") +                          # one tile per cell
+  geom_text(aes(label = Freq)) +                        # count in each tile
+  scale_fill_gradient(low = "white", high = "blue") +   # darker = more wines
+  labs(title = "Multinomial Logistic Regression",
+       subtitle = "Confusion Matrix",
+       x = "Predicted Quality", y = "Actual Quality")
 ```
+
+Of the `r sum(cm_counts[, "2"])` good wines in the test set, `r cm_counts["1", "2"]` are predicted average and only `r cm_counts["0", "2"]` is predicted poor. Likewise, only `r cm_counts["2", "0"]` poor wines are predicted good. Most mistakes are between **neighboring** classes. This happens because the classes are ordered: a good wine is chemically closer to an average wine than to a poor one. The model doesn't know about this ordering (see the Extension).
 
 ## Accuracy and per-class metrics
 
-*TODO: Compare accuracy with the no-information rate. Show recall and F1 per class; explain why good is lowest.*
+`caret::confusionMatrix()` computes overall accuracy and one-vs-all metrics for each class. It expects the predicted and actual classes as factors with the same levels.
 
 ```{r metrics}
-# TODO: copy sections 6 and 8
+test_y      <- factor(test$quality_group, levels = c("0", "1", "2"))
+test_y_pred <- factor(predicted_classes,  levels = c("0", "1", "2"))
+
+cm <- confusionMatrix(test_y_pred, test_y, mode = "everything")
+
+cm$overall[c("Accuracy", "AccuracyNull")]
+round(cm$byClass[, c("Precision", "Recall", "F1")], 3)
 ```
+
+The model classifies `r round(100 * cm$overall["Accuracy"], 1)`% of test wines correctly. The **no-information rate** (`AccuracyNull`) is `r round(100 * cm$overall["AccuracyNull"], 1)`%: the accuracy you would get by always guessing the largest class, poor. Section 9.5 tests whether the gap is real.
+
+For each class:
+
+- **Precision**: of the wines predicted to be in this class, the share that really are.
+- **Recall**: of the wines really in this class, the share the model finds.
+- **F1**: the harmonic mean of precision and recall.
+
+Recall for good wines is only `r round(cm$byClass["Class: 2", "Recall"], 2)`. Good wines are just `r round(100 * mean(wine$quality_group == "2"), 1)`% of the data, so the model gains little likelihood by getting them right. It predicts good only when it is very sure. On top of that, good wines overlap heavily with average wines in chemistry (Section 4.3).
 
 ## Macro and weighted averages
 
-*TODO: Define macro and weighted averages in one sentence each. Say why macro F1 suits imbalanced data. Mention that micro average equals accuracy here.*
+To summarize the three classes with one number:
+
+- The **macro average** is the plain mean across classes, so every class counts equally.
+- The **weighted average** weights each class by its share of the test set, so large classes count more.
 
 ```{r averages}
-# TODO: copy section 9 (consider showing only Precision, Recall, F1)
+# share of test wines in each class, in the order 0, 1, 2
+weights <- as.numeric(prop.table(table(test_y)))
+
+averaging_scores <- data.frame(t(cm$byClass)) %>%   # one column per class
+  setNames(c("Poor", "Average", "Good")) %>%
+  mutate(macro_avg    = (Poor + Average + Good) / 3,
+         weighted_avg = weights[1] * Poor + weights[2] * Average + weights[3] * Good)
+
+round(averaging_scores[c("Precision", "Recall", "F1"), ], 3)
 ```
+
+Macro F1 (`r round(averaging_scores["F1", "macro_avg"], 3)`) is lower than weighted F1 (`r round(averaging_scores["F1", "weighted_avg"], 3)`) because the weak good class counts fully in the macro average. With imbalanced data, **macro F1** is the more honest summary: a model can't score well on it by ignoring the rare class.
+
+A third option, the **micro average**, pools the counts across classes before computing the metric. When every wine gets exactly one label, micro precision, micro recall and micro F1 all equal accuracy (`r round(cm$overall["Accuracy"], 3)`), so they add nothing here. The script computes them anyway.
 
 ## ROC curves and log loss
 
-*TODO: Show the three ROC curves and AUCs. Explain why average has the lowest AUC. One sentence on log loss.*
+The metrics above only use the predicted class. ROC curves and log loss use the predicted **probabilities**.
 
-```{r roc}
-# TODO: copy section 7; remove png() and dev.off() so plots show inline
+First we put the actual classes and probabilities in one data frame with readable names:
+
+```{r roc-setup}
+# rename probability columns by looking up each column's class code
+class_label <- c("0" = "poor", "1" = "avg", "2" = "good")
+probs <- as.data.frame(predicted_probabilities)
+colnames(probs) <- paste0("pred_prob_", class_label[colnames(probs)])
+
+results <- data.frame(
+  actual = factor(recode(as.character(test_y),
+                         "0" = "poor", "1" = "average", "2" = "good"),
+                  levels = c("average", "poor", "good")),   # same order as the columns
+  probs
+)
+head(results)
 ```
+
+With three classes we draw one **one-vs-all** ROC curve per class: for example, poor vs. not poor, ranked by the predicted probability of poor.
+
+```{r roc, fig.width = 10, fig.height = 3.8}
+plot_roc <- function(truth_class, prob_col, label) {
+  roc_obj <- roc(results$actual == truth_class, results[[prob_col]], quiet = TRUE)
+  plot(roc_obj,
+       main = paste0(label, " vs. all"),
+       col = "#1c7ed6", lwd = 3,
+       print.auc = TRUE, print.auc.cex = 1.3,   # print the AUC on the plot
+       legacy.axes = TRUE)    # x-axis = 1 - specificity; the gray line is chance
+  as.numeric(auc(roc_obj))
+}
+
+par(mfrow = c(1, 3))   # three plots side by side
+auc_poor <- plot_roc("poor",    "pred_prob_poor", "Poor")
+auc_avg  <- plot_roc("average", "pred_prob_avg",  "Average")
+auc_good <- plot_roc("good",    "pred_prob_good", "Good")
+par(mfrow = c(1, 1))
+
+round(c(poor = auc_poor, average = auc_avg, good = auc_good), 3)
+```
+
+The AUC is the probability that a randomly chosen wine from the class gets a higher predicted probability than a randomly chosen wine outside it (0.5 = chance, 1 = perfect). Good has a high AUC even though its recall is low. The model *ranks* good wines well, but its probabilities rarely cross the point where good becomes the most likely class.
+
+**Average has the lowest AUC** (`r round(auc_avg, 2)`). It sits between the other two classes, so "not average" includes both better and worse wines. Moving a wine's chemistry in either direction lowers its probability of average, which makes average hard to separate with one ranking.
+
+```{r log-loss}
+# columns must be listed in the same order as levels(results$actual)
+mn_log_loss(results, truth = actual,
+            pred_prob_avg, pred_prob_poor, pred_prob_good)
+```
+
+**Log loss** is the average of $-\log(\text{probability given to the true class})$. Lower is better, and confident wrong predictions are penalized heavily. Guessing 1/3 for every class gives $\log 3 \approx$ `r round(log(3), 3)`, so our model's probabilities are clearly informative.
 
 ## Baseline and cross-validation
 
-*TODO: Report the baseline comparison. One sentence: tuning decay didn't change CV accuracy, so we keep the unpenalized model.*
+Is `r round(100 * cm$overall["Accuracy"], 1)`% accuracy actually better than always guessing poor?
 
-```{r validation}
-# TODO: copy section 10
+```{r baseline}
+data.frame(model    = c("Always predict poor", "Multinomial logistic regression"),
+           accuracy = round(c(cm$overall["AccuracyNull"], cm$overall["Accuracy"]), 3),
+           row.names = NULL)
+
+cm$overall["AccuracyPValue"]   # one-sided test: accuracy > no-information rate
 ```
+
+The p-value is tiny, so the model clearly beats the baseline.
+
+One test set gives one estimate. **10-fold cross-validation** on the training data gives a more stable one. We also tune `decay`, the L2 (ridge) penalty in `multinom()`. `decay = 0` is the unpenalized model we fit above.
+
+```{r validation, fig.height = 3.5}
+train_x <- dplyr::select(train, -quality_group)
+train_y <- factor(train$quality_group, levels = c("0", "1", "2"))
+
+set.seed(123)   # reproducible fold assignment
+cv_fit <- train(
+  x = train_x, y = train_y,
+  method     = "multinom",
+  preProcess = c("center", "scale"),       # scaling redone inside each fold
+  trControl  = trainControl(method = "cv", number = 10),
+  tuneGrid   = expand.grid(decay = c(0, 0.001, 0.01, 0.1, 1)),
+  trace      = FALSE                       # hide multinom's iteration log
+)
+round(cv_fit$results[, c("decay", "Accuracy", "Kappa")], 4)
+plot(cv_fit)
+```
+
+Cross-validated accuracy is between `r round(min(cv_fit$results$Accuracy), 3)` and `r round(max(cv_fit$results$Accuracy), 3)` for every decay value. The plot looks dramatic only because its y-axis spans less than 0.001. Penalizing doesn't help, so **we keep the unpenalized model**. CV accuracy is also close to our test accuracy, so the test result isn't a lucky split.
 
 # Class imbalance
 
-*TODO: Explain class weights, w = n / (3 n_class). Compare the weighted and unweighted models: good-wine recall more than doubles, accuracy is unchanged, average-wine recall drops.*
+The model maximizes the likelihood over all training wines. Since good wines are rare, misclassifying them costs little, so the model rarely predicts good.
+
+**Class weights** fix this by giving each training wine a weight inversely proportional to its class size:
+
+$$
+w_i = \frac{n}{K \, n_{c(i)}},
+$$
+
+where $n$ is the number of training wines, $K = 3$ is the number of classes and $n_{c(i)}$ is the size of wine $i$'s class. Each class then has the same total weight, $n/3$.
 
 ```{r class-weights}
-# TODO: copy section 8b
+counts <- table(train$quality_group)
+round(nrow(train) / (3 * counts), 2)   # weight for each class
+
+w <- as.numeric(nrow(train) / (3 * counts[train$quality_group]))   # one weight per wine
+
+model_w <- multinom(quality_group ~ ., data = train, weights = w,
+                    maxit = 1000, trace = FALSE)
+model_w$convergence   # 0 = converged
+
+pred_w <- factor(predict(model_w, newdata = test, type = "class"),
+                 levels = c("0", "1", "2"))
+cm_w <- confusionMatrix(pred_w, test_y, mode = "everything")
+
+# recall by class
+data.frame(class             = c("poor", "average", "good"),
+           recall_unweighted = round(cm$byClass[, "Recall"], 3),
+           recall_weighted   = round(cm_w$byClass[, "Recall"], 3),
+           row.names = NULL)
+
+# overall accuracy and macro F1
+data.frame(model    = c("unweighted", "weighted"),
+           accuracy = round(c(cm$overall["Accuracy"], cm_w$overall["Accuracy"]), 3),
+           macro_f1 = round(c(mean(cm$byClass[, "F1"]), mean(cm_w$byClass[, "F1"])), 3))
 ```
+
+Weighting more than doubles recall for good wines, from `r round(cm$byClass["Class: 2", "Recall"], 2)` to `r round(cm_w$byClass["Class: 2", "Recall"], 2)`. Accuracy is the same (`r round(cm_w$overall["Accuracy"], 3)`) and macro F1 rises to `r round(mean(cm_w$byClass[, "F1"]), 3)`. The cost is lower recall for average wines (`r round(cm_w$byClass["Class: 1", "Recall"], 2)` vs. `r round(cm$byClass["Class: 1", "Recall"], 2)`): many of them are now called good.
+
+Which model is better depends on the goal. If finding good wines matters, for example for a buyer, the weighted model is the better choice. Weights change only how training wines count. The test set is never reweighted.
 
 # Multicollinearity
 
-*TODO: Show predictor correlations and name the strongest pairs. Explain that correlated predictors make coefficients unstable, using density as the example. Add this code to the script too.*
+Predictors are **collinear** when they move together. We check the correlations in the training set (standardizing doesn't change correlations):
 
-```{r multicollinearity}
-# TODO: e.g. round(cor(train[predictors]), 2)
+```{r multicollinearity, fig.width = 7, fig.height = 6}
+cor_matrix <- cor(train[predictors])
+
+# the five most strongly correlated pairs, each listed once
+as.data.frame(as.table(cor_matrix)) %>%
+  filter(as.character(Var1) < as.character(Var2)) %>%
+  mutate(abs_cor = abs(Freq)) %>%
+  arrange(desc(abs_cor)) %>%
+  head(5)
+
+# heatmap: blue = positive, red = negative
+as.data.frame(as.table(cor_matrix)) %>%
+  ggplot(aes(x = Var1, y = Var2, fill = Freq)) +
+  geom_tile() +
+  geom_text(aes(label = round(Freq, 2)), size = 2.5) +
+  scale_fill_gradient2(low = "firebrick", mid = "white", high = "steelblue",
+                       limits = c(-1, 1)) +
+  labs(title = "Correlation between predictors", x = NULL, y = NULL, fill = "r") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
 ```
+
+The strongest pairs are free and total sulfur dioxide, and fixed acidity with citric acid, pH and density (all around $|r| \approx 0.68$). Density is also correlated with alcohol ($r \approx -0.48$).
+
+When predictors are correlated, the model can't tell which one deserves the credit. Coefficients can shift a lot, or even change sign, when a related predictor is added or dropped, and their standard errors grow. **Predictions are mostly unaffected.**
+
+To see this, we refit the model without density:
+
+```{r drop-density}
+model_no_density <- multinom(quality_group ~ . - density, data = train,
+                             maxit = 1000, trace = FALSE)
+
+terms <- c("alcohol", "`fixed acidity`")   # multinom keeps backticks around names with spaces
+data.frame(
+  class        = rep(c("poor", "good"), times = 2),
+  term         = rep(c("alcohol", "fixed acidity"), each = 2),
+  coef_with    = round(as.vector(coef(model)[, terms]), 3),
+  coef_without = round(as.vector(coef(model_no_density)[, terms]), 3),
+  se_with      = round(as.vector(summary(model)$standard.errors[, terms]), 3),
+  se_without   = round(as.vector(summary(model_no_density)$standard.errors[, terms]), 3)
+)
+
+# test accuracy with and without density
+pred_nd <- factor(predict(model_no_density, newdata = test, type = "class"),
+                  levels = c("0", "1", "2"))
+c(with_density    = mean(test_y_pred == test_y),
+  without_density = mean(pred_nd == test_y))
+```
+
+Without density, the fixed acidity coefficient for good vs. average drops from `r round(coef(model)["2", terms[2]], 2)` to `r round(coef(model_no_density)["2", terms[2]], 2)`, almost nothing. The alcohol coefficient for good grows from `r round(coef(model)["2", "alcohol"], 2)` to `r round(coef(model_no_density)["2", "alcohol"], 2)`. Every standard error shrinks. Test accuracy barely moves (`r round(mean(pred_nd == test_y), 3)` vs. `r round(mean(test_y_pred == test_y), 3)`).
+
+The lesson: with collinear predictors, **don't read too much into any single coefficient**. If interpretation matters, drop or combine redundant predictors, or use a penalty. If you only need predictions, collinearity is a much smaller concern.
 
 # Extension
 
 ::: action
-*TODO: One exercise for the reader, e.g. use poor as the reference class, or try MASS::polr().*
+**Exercise: change the reference class.** Refit the model with poor as the reference (`relevel(train$quality_group, ref = "0")`).
+
+1. Check that the predicted classes on the test set don't change.
+2. Find the RRR for alcohol in the good vs. poor equation.
+3. Show that the same number comes from the original model as `exp(coef(model)["2", "alcohol"] - coef(model)["0", "alcohol"])`. Why does this work?
+
+*Going further:* our model treats poor, average and good as unordered labels. Fit an ordinal logistic regression with `MASS::polr()`, which uses one set of coefficients plus two cutpoints, and compare its test accuracy and macro F1 with ours.
 :::
 
 # Conclusion
 
-*TODO: Summarize key results with inline R (accuracy vs. baseline, macro F1, top predictors, effect of weights). List limitations (imbalance, linear model, ordered classes treated as unordered, duplicates) and next steps.*
+Multinomial logistic regression extends binary logistic regression to three or more classes by fitting one log-odds equation per non-reference class. On the red wine data:
+
+- The model reaches `r round(100 * cm$overall["Accuracy"], 1)`% test accuracy, well above the `r round(100 * cm$overall["AccuracyNull"], 1)`% from always guessing poor, with macro F1 `r round(mean(cm$byClass[, "F1"]), 3)`.
+- **Alcohol** and **sulphates** push wines away from poor and toward good. **Volatile acidity** pushes them toward poor.
+- The rare good class is the hardest to predict. Class weights raise its recall from `r round(cm$byClass["Class: 2", "Recall"], 2)` to `r round(cm_w$byClass["Class: 2", "Recall"], 2)` at no cost in accuracy.
+- Correlated predictors such as density make individual coefficients unstable but barely affect predictions.
+
+**Limitations.**
+
+- The classes are imbalanced, and the cutoffs (≤ 5, 6, ≥ 7) are our choice. Different cutoffs would give different results.
+- The model is linear in the log-odds, so it can't capture interactions or curved effects without extra terms.
+- The classes are ordered, but the model treats them as unordered labels.
+- The data contain `r sum(duplicated(wine))` duplicate rows, some of which may fall in both the training and test sets, so the test results may be slightly optimistic.
+- Quality scores come from tasters and are subjective.
+
+**Next steps:** fit an ordinal model (`MASS::polr()`), add interaction or spline terms, and compare against flexible classifiers such as random forests.
 
 # References
 
-*TODO: Add at least one more reference.*
-
 1.  Cortez, P., Cerdeira, A., Almeida, F., Matos, T., & Reis, J. (2009). Modeling wine preferences by data mining from physicochemical properties. *Decision Support Systems*, 47(4), 547–553.
 2.  James, G., Witten, D., Hastie, T., & Tibshirani, R. (2021). *An Introduction to Statistical Learning* (2nd ed.), Section 4.3.5. Springer.
+3.  Agresti, A. (2013). *Categorical Data Analysis* (3rd ed.), Chapter 8. Wiley.
+4.  Venables, W. N., & Ripley, B. D. (2002). *Modern Applied Statistics with S* (4th ed.). Springer. (Source of the `nnet` package.)
+5.  Kuhn, M. (2008). Building predictive models in R using the caret package. *Journal of Statistical Software*, 28(5), 1–26.
+6.  Robin, X., et al. (2011). pROC: an open-source package for R and S+ to analyze and compare ROC curves. *BMC Bioinformatics*, 12, 77.
