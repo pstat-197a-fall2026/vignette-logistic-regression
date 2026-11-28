@@ -290,6 +290,55 @@ data.frame(model    = c("unweighted", "weighted"),
            macro_f1 = c(mean(cm$byClass[, "F1"]), mean(cm_w$byClass[, "F1"])))
 
 
+#8c. MULTICOLLINEARITY
+
+# correlations between predictors in the training set
+# (standardizing does not change correlations)
+cor_matrix <- cor(train[predictors])
+round(cor_matrix, 2)
+
+# the five most strongly correlated pairs (each pair listed once)
+cor_pairs <- as.data.frame(as.table(cor_matrix)) %>%
+  filter(as.character(Var1) < as.character(Var2)) %>%
+  mutate(abs_cor = abs(Freq)) %>%
+  arrange(desc(abs_cor))
+head(cor_pairs, 5)
+
+# correlation heatmap: blue = positive, red = negative
+cor_plot <- as.data.frame(as.table(cor_matrix)) %>%
+  ggplot(aes(x = Var1, y = Var2, fill = Freq)) +
+  geom_tile() +
+  geom_text(aes(label = round(Freq, 2)), size = 2.5) +
+  scale_fill_gradient2(low = "firebrick", mid = "white", high = "steelblue",
+                       limits = c(-1, 1)) +
+  labs(title = "Correlation between predictors", x = NULL, y = NULL, fill = "r") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+cor_plot
+ggsave("img/fig-correlation.png", cor_plot, width = 7, height = 6, dpi = 150)
+
+# effect of correlated predictors: refit without density, which is correlated
+# with both alcohol and fixed acidity, and compare their coefficients and SEs
+model_no_density <- multinom(quality_group ~ . - density, data = train,
+                             maxit = 1000, trace = FALSE)
+model_no_density$convergence      # 0 = converged
+
+terms <- c("alcohol", "`fixed acidity`")   # multinom stores names with spaces in backticks
+data.frame(
+  class           = rep(c("poor", "good"), times = 2),
+  term            = rep(c("alcohol", "fixed acidity"), each = 2),
+  coef_with       = as.vector(coef(model)[, terms]),
+  coef_without    = as.vector(coef(model_no_density)[, terms]),
+  se_with         = as.vector(summary(model)$standard.errors[, terms]),
+  se_without      = as.vector(summary(model_no_density)$standard.errors[, terms])
+)
+
+# test accuracy with and without density: predictions barely change
+pred_nd <- factor(predict(model_no_density, newdata = test, type = "class"),
+                  levels = c("0", "1", "2"))
+c(with_density    = mean(test_y_pred == test_y),
+  without_density = mean(pred_nd == test_y))
+
+
 #9. MACRO, WEIGHTED AND MICRO AVERAGES
 
 # class weights: the share of test wines in each class (for the weighted average)
