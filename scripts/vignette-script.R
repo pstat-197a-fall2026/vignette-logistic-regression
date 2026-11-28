@@ -89,6 +89,19 @@ train$quality_group <- relevel(train$quality_group, ref = "1")
 # give the test outcome the same level order as the training outcome
 test$quality_group <- factor(test$quality_group, levels = c("1", "0", "2"))
 
+# standardize the predictors (mean 0, SD 1) so coefficients are comparable and
+# the optimizer converges reliably. Means and SDs come from the TRAINING set only
+# and are applied to both sets, so nothing about the test set leaks into the model.
+# Standardizing does not change the model's predictions, only the coefficient scale.
+predictors  <- setdiff(names(train), "quality_group")
+train_means <- sapply(train[predictors], mean)
+train_sds   <- sapply(train[predictors], sd)
+
+train[predictors] <- as.data.frame(scale(train[predictors], center = train_means, scale = train_sds))
+test[predictors]  <- as.data.frame(scale(test[predictors],  center = train_means, scale = train_sds))
+
+round(sapply(train[predictors], mean), 3)   # check: all approximately 0
+
 # save the splits so other documents (e.g. the evaluation notebook) can reuse them
 save(train, file = "./data/train_data.RData")
 save(test,  file = "./data/test_data.RData")
@@ -98,11 +111,14 @@ save(test,  file = "./data/test_data.RData")
 
 # multinom() fits two logistic regressions at once (poor vs average, good vs
 # average), each with its own coefficients; `.` means "use all other columns"
-model <- multinom(quality_group ~ ., data = train)
+# maxit = 1000 gives the optimizer enough iterations to fully converge
+# (the default of 100 can stop early)
+model <- multinom(quality_group ~ ., data = train, maxit = 1000)
+model$convergence                 # 0 = converged; 1 = stopped at the iteration limit
 summary(model)                    # coefficients and standard errors, one row per non-reference class
 
 exp(coef(model))                  # relative risk ratios: multiplicative change in the odds of
-# (poor or good) vs average for a 1-unit increase in the predictor
+# (poor or good) vs average for a 1-SD increase in the predictor
 head(round(fitted(model), 2))     # fitted class probabilities for the first training wines
 
 save(model, file = "./data/multiclass-logistic-model.RData")
@@ -213,6 +229,34 @@ mean(c(auc_poor, auc_avg, auc_good))                     # macro-averaged AUC
 # (sensitivity, specificity, precision, recall, F1, ...)
 cm <- confusionMatrix(test_y_pred, test_y, mode = "everything")
 cm
+
+
+#8b. CLASS WEIGHTS FOR CLASS IMBALANCE
+
+# good wines are rare, so the unweighted model rarely predicts "good".
+# weight each training wine inversely to its class size, w = n / (3 * n_class),
+# so all three classes contribute equally to the likelihood
+counts <- table(train$quality_group)
+w <- as.numeric(nrow(train) / (3 * counts[train$quality_group]))
+
+model_w <- multinom(quality_group ~ ., data = train, weights = w,
+                    maxit = 1000, trace = FALSE)
+model_w$convergence               # 0 = converged
+
+# predictions and metrics for the weighted model (level order 0, 1, 2 as above)
+pred_w <- factor(predict(model_w, newdata = test, type = "class"),
+                 levels = c("0", "1", "2"))
+cm_w <- confusionMatrix(pred_w, test_y, mode = "everything")
+
+# recall by class: weighting should raise recall for good wines
+data.frame(class             = c("poor", "average", "good"),
+           recall_unweighted = cm$byClass[, "Recall"],
+           recall_weighted   = cm_w$byClass[, "Recall"])
+
+# overall accuracy and macro F1: weighting usually costs a little accuracy
+data.frame(model    = c("unweighted", "weighted"),
+           accuracy = c(cm$overall["Accuracy"], cm_w$overall["Accuracy"]),
+           macro_f1 = c(mean(cm$byClass[, "F1"]), mean(cm_w$byClass[, "F1"])))
 
 
 #9. MACRO, WEIGHTED AND MICRO AVERAGES
